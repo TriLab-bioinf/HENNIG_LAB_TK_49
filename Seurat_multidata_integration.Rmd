@@ -1,0 +1,298 @@
+---
+title: "SEURAT MULTIDATA INTEGRATION"
+author: "Hernan Lorenzi"
+output:
+  html_document:
+    df_print: paged
+---
+
+### Load libraries
+```{r setup, message=TRUE, warning=TRUE}
+library(Seurat)
+library(ggplot2)
+library(tidyverse)
+library(gridExtra)
+library(cowplot)
+library(HGNChelper)
+library(viridis)
+library(hrbrthemes)
+library(ggpubr)
+```
+
+
+### Load datasets
+```{r Load datasets}
+dirs <- list.dirs(path = "GEX/", full.names = F, recursive = F)
+
+object_name_list = c()
+for (x in dirs){
+  name = gsub('[0-9]+_GEX_','',x, perl = T)
+  cts <- ReadMtx(mtx = paste0('GEX/',x,'/filtered_feature_bc_matrix/matrix.mtx.gz'),
+          features = paste0('GEX/',x,'/filtered_feature_bc_matrix/features.tsv.gz'),
+          cells = paste0('GEX/',x,'/filtered_feature_bc_matrix/barcodes.tsv.gz')
+          )
+  assign(name,CreateSeuratObject(counts = cts))
+  object_name_list <- c(object_name_list, name)
+}
+```
+
+### Identify doublets on each single sample with DoubletFinder
+```{r}
+# library(DoubletFinder)
+
+
+```
+
+### Merge Seurat objects
+```{r merge Seurat objects}
+liver_merged_seurat <- merge(x = Liver_1793_WT,
+                             y=c(Liver_1812_WT,Liver_1797_WT,
+                                 Liver_1794_Het,Liver_1798_Het,Liver_1811_Het,
+                                 Liver_1795_Homo,Liver_1796_Homo),
+                             add.cell.ids = c("Liver_1793_WT","Liver_1812_WT","Liver_1797_WT","Liver_1794_Het","Liver_1798_Het","Liver_1811_Het","Liver_1795_Homo","Liver_1796_Homo"),
+                             project = 'TK_49')
+
+ln_merged_seurat <- merge(x = LN_1797_WT,y=c(LN_1793_WT,LN_1812_WT,LN_1794_Het,LN_1798_Het,LN_1811_Het,LN_1795_Homo,LN_1796_Homo),
+      add.cell.ids = c("LN_1797_WT","LN_1793_WT","LN_1812_WT","LN_1794_Het","LN_1798_Het","LN_1811_Het","LN_1795_Homo","LN_1796_Homo"), 
+      project = 'TK_49')
+```
+
+### Add useful info to metadata table
+```{r tweak metadata}
+ln_merged_seurat$sample <- rownames(ln_merged_seurat@meta.data)
+
+ln_merged_seurat@meta.data <- separate(data = ln_merged_seurat@meta.data, col = "sample", into = c("tissue", "mouse", "genotype", "barcode"), sep = "_")
+```
+
+### Data quality control
+#### Calculate mitochondrial percentage
+```{r}
+ln_merged_seurat$mitoPercent <- PercentageFeatureSet(ln_merged_seurat, pattern = '^mt-')
+```
+
+#### Explore QC
+```{r}
+# Make Plot dir
+dir.create(path = "./Plots", showWarnings = F)
+# Visualize QC metrics as a violin plot
+p1 <- VlnPlot(ln_merged_seurat, features = c("nFeature_RNA", "nCount_RNA", "mitoPercent"), ncol = 3)
+ggsave2(filename = "./Plots/QC_feat_cnt_mt.pdf", plot = p1)
+```
+
+
+```{r}
+plot1 <- FeatureScatter(ln_merged_seurat, feature1 = "nCount_RNA", feature2 = "mitoPercent") + geom_hline(yintercept = 5, col = "gray") + geom_vline(xintercept = 500, col = "gray")
+plot2 <- FeatureScatter(ln_merged_seurat, feature1 = "nCount_RNA", feature2 = "nFeature_RNA") + geom_hline(yintercept = c(200,4300), col = "gray") + geom_vline(xintercept = 500, col = "gray")
+ggsave2(filename = "./Plots/QC_scatterplots.pdf",plot=grid.arrange(plot1,plot2, nrow = 2, ncol = 1), height = 11)
+grid.arrange(plot1,plot2, nrow = 2, ncol = 1)
+```
+
+
+### Data filtering
+```{r}
+ln_merged_seurat_filtered <- subset(ln_merged_seurat, subset = nCount_RNA > 500 &
+        nFeature_RNA > 500 &
+        nFeature_RNA < 4300 &
+        mitoPercent < 5)
+```
+
+### Perform standard workflow to check if there is any batch effects
+```{r}
+ln_merged_seurat_filtered <- NormalizeData(object = ln_merged_seurat_filtered)
+ln_merged_seurat_filtered <- FindVariableFeatures(object = ln_merged_seurat_filtered)
+ln_merged_seurat_filtered <- ScaleData(object = ln_merged_seurat_filtered)
+ln_merged_seurat_filtered <- RunPCA(object = ln_merged_seurat_filtered)
+
+```
+### Make PC selection
+```{r}
+elbow.p1 <- ElbowPlot(object = ln_merged_seurat_filtered, ndims = 50)
+ggsave2(filename = "./Plots/elbowplot.pdf", plot = elbow.p1)
+elbow.p1
+```
+Based on elbow plot I will use as threshold PC40
+
+### Clustering and UMAP
+```{r}
+ln_merged_seurat_filtered <- FindNeighbors(object = ln_merged_seurat_filtered, dims = 1:40)
+ln_merged_seurat_filtered <- FindClusters(object = ln_merged_seurat_filtered, resolution = c(0.1, 0.3, 0.5, 0.7, 1), random.seed = 1234)
+ln_merged_seurat_filtered <- RunUMAP(object = ln_merged_seurat_filtered, dims = 1:40)
+```
+
+#### Dimension Plots
+```{r}
+p1 <- DimPlot(object = ln_merged_seurat_filtered, reduction = 'umap', group.by = 'mouse')
+p2 <- DimPlot(object = ln_merged_seurat_filtered, reduction = 'umap', group.by = 'genotype', cols = c('red','green','blue'))
+p3 <- DimPlot(object = ln_merged_seurat_filtered, reduction = 'umap', group.by = 'RNA_snn_res.0.1')
+p4 <- DimPlot(object = ln_merged_seurat_filtered, reduction = 'umap', group.by = 'RNA_snn_res.0.3')
+p5 <- DimPlot(object = ln_merged_seurat_filtered, reduction = 'umap', group.by = 'RNA_snn_res.0.5')
+p6 <- DimPlot(object = ln_merged_seurat_filtered, reduction = 'umap', group.by = 'RNA_snn_res.0.7')
+p7 <- DimPlot(object = ln_merged_seurat_filtered, reduction = 'umap', group.by = 'RNA_snn_res.1')
+
+ggsave2(filename = "./Plots/ln_umap_mouse_genotype.pdf", plot = grid.arrange(p1, p2,p3,p4,p5,p6,p7, ncol=2, nrow=4), width = 11, height = 15)
+grid.arrange(p1, p2,p3, ncol = 2, nrow=2)
+
+```
+Based on the UMAP plots above, there is no evident batch effect in the data based on mouse ID. So, no batch correction will be required. Also, I will pick clusters with resolution=0.5
+
+#### Asign cluster number
+```{r}
+ln_merged_seurat_filtered$seurat_clusters = ln_merged_seurat_filtered$RNA_snn_res.0.5
+```
+
+
+#### Annotate clusters with ScType
+```{r message=FALSE, warning=FALSE}
+
+# load gene set preparation function
+source("https://raw.githubusercontent.com/IanevskiAleksandr/sc-type/master/R/gene_sets_prepare.R")
+# load cell type annotation function
+source("https://raw.githubusercontent.com/IanevskiAleksandr/sc-type/master/R/sctype_score_.R")
+
+
+# DB file
+db_ = "https://raw.githubusercontent.com/IanevskiAleksandr/sc-type/master/ScTypeDB_full.xlsx";
+tissue = "Immune system" 
+# e.g. Immune system,Pancreas,Liver,Eye,Kidney,Brain,Lung,Adrenal,Heart,Intestine,Muscle,Placenta,Spleen,Stomach,Thymus 
+
+# prepare gene sets
+gs_list = gene_sets_prepare(db_, tissue)
+
+# get cell-type by cell matrix
+es.max = sctype_score(scRNAseqData = ln_merged_seurat_filtered[["RNA"]]@scale.data, scaled = TRUE, 
+                      gs = gs_list$gs_positive, gs2 = gs_list$gs_negative)
+
+
+# merge by cluster
+cL_resutls = do.call("rbind", lapply(unique(ln_merged_seurat_filtered@meta.data$seurat_clusters), function(cl){
+  es.max.cl = sort(rowSums(es.max[ ,rownames(ln_merged_seurat_filtered@meta.data[ln_merged_seurat_filtered@meta.data$seurat_clusters==cl, ])]), decreasing = !0)
+  head(data.frame(cluster = cl, type = names(es.max.cl), scores = es.max.cl, ncells = sum(ln_merged_seurat_filtered@meta.data$seurat_clusters==cl)), 10)
+}))
+sctype_scores = cL_resutls %>% group_by(cluster) %>% top_n(n = 1, wt = scores)  
+
+# set low-confident (low ScType score) clusters to "unknown"
+sctype_scores$type[as.numeric(as.character(sctype_scores$scores)) < sctype_scores$ncells/4] = "Unknown"
+print(sctype_scores[,1:3])
+
+# Overlay the identified cell types on UMAP plot: 
+ln_merged_seurat_filtered@meta.data$customclassif = ""
+for(j in unique(sctype_scores$cluster)){
+  cl_type = sctype_scores[sctype_scores$cluster==j,]; 
+  ln_merged_seurat_filtered@meta.data$customclassif[ln_merged_seurat_filtered@meta.data$seurat_clusters == j] = as.character(cl_type$type[1])
+}
+
+annot_clusters.p1 <- DimPlot(ln_merged_seurat_filtered, reduction = "umap", label = TRUE, repel = TRUE, group.by = 'customclassif')  
+ggsave2(filename = "./Plots/ln_annotated_clusters_umap.pdf", plot = annot_clusters.p1, width = 11, height = 11)
+annot_clusters.p1
+```
+
+### Save Seurat analysis
+```{r}
+# Save final classified pbmc dataset
+saveRDS(ln_merged_seurat_filtered, file = "GEX_LN_seurat_analysis_03272023.rds")
+
+```
+
+### Batch correction
+#### Perform integration of Seurat objects to correct for batch effect
+```{r}
+# obj.list <- SplitObject(ln_merged_seurat_filtered, split.by = 'mouse')
+# for (i in 1:length(obj.list)){
+#   obj.list[[i]] <- NormalizeData(object = obj.list[[i]])
+#   obj.list[[i]] <- FindVariableFeatures(object = obj.list[[i]])
+#}
+```
+#### Select integration features
+```{r}
+# features <- SelectIntegrationFeatures(object.list = obj.list)
+```
+
+#### Find integration anchors using cannonical correlation analysis (CCA)
+```{r}
+# anchors <- FindIntegrationAnchors(object.list = obj.list)
+```
+
+#### Integrate data
+```{r}
+# seurat.integrated <- IntegrateData(anchorset = anchors)
+```
+
+#### Scale data, run PCS and UMAP and visualize integrated data
+```{r}
+# seurat.integrated <- ScaleData(object = seurat.integrated)
+# seurat.integrated <- RunPCA(object = seurat.integrated)
+# seurat.integrated <- RunUMAP(object = seurat.integrated, dims = 1:40)
+```
+
+#### Visualize integrated clusters
+```{r}
+# int.p1 <- DimPlot(seurat.integrated, reduction = 'umap', group.by = 'mouse')
+# int.p2 <- DimPlot(seurat.integrated, reduction = 'umap', group.by = 'genotype')
+# ggsave2(filename = "./Plots/ln_integrated_umap_mouse_genotype.pdf", plot = grid.arrange(int.p1, int.p2, ncol = 2), width = 11)
+# grid.arrange(int.p1, int.p2, ncol = 2)
+```
+
+### Estimate proportion of each cell type per sample
+```{r}
+ln_meta <- as_tibble(ln_merged_seurat_filtered@meta.data)
+
+# Remove unwanted columns
+keep <- grep(pattern = '^RNA_snn_res', colnames(ln_meta), invert = T)
+ln_meta <- ln_meta[,keep]
+```
+
+#### Add columns with data summaries grouped by genotype, mouse ID and cell-type
+```{r}
+cell_dist <- ln_meta %>% group_by(genotype, mouse) %>%
+    count(genotype, customclassif) %>%
+    mutate(percent = n / sum(n) * 100) %>%
+    mutate(group = paste0(genotype,"_",customclassif))
+
+colnames(cell_dist) <- c("Genotype","Mouse_ID","Cell_type","Cell_count","Percent","Group" )
+
+write.csv(x = cell_dist, file = "Cell_distribution_summary.csv",col.names = F )
+head(cell_dist)
+```
+
+#### Cell-type composition plots
+```{r}
+cell_dist.p <- cell_dist %>% ggplot(aes(fill=Cell_type, y=Cell_count, x=Genotype)) +
+    geom_bar(position="fill", stat="identity") +
+    scale_fill_viridis(discrete = T) +
+    ggtitle("Proportion of cell-types per genotype") +
+    theme_ipsum(base_family = 'Helvetica', base_size = 10, axis_title_just = 0.5) +
+    ylab('Percent') 
+
+ggsave2(filename = "./Plots/cell_distrib_barchar.pdf", plot = cell_dist.p)
+print(cell_dist.p)
+
+
+```
+
+```{r}
+cell_dist_perc <- cell_dist %>% ggplot(aes(fill=Cell_type, y=Percent, x=Genotype)) +
+                    geom_bar(position="dodge", stat="identity") +
+                    scale_fill_viridis(discrete = T) +
+                    ggtitle("Proportion of cell-types per genotype") +
+                    theme_ipsum(axis_title_just = 0.5, base_family = 'Helvetica', strip_text_size=10) +
+                    facet_wrap(~Cell_type, labeller = label_wrap_gen())
+
+
+ggsave2(filename = "./Plots/cell_distrib_barchar_facet.pdf", plot = cell_dist_perc, width = 13)
+print(cell_dist_perc)
+
+```
+
+```{r}
+cell_dist.box.p <- cell_dist %>% ggplot(aes(x = Genotype, y = Percent, fill=Cell_type)) + 
+                                  geom_boxplot() + 
+                                  scale_fill_viridis(discrete = T) +
+                                  theme_ipsum(axis_title_just = 0.5, 
+                                              base_family = 'Helvetica', 
+                                              strip_text_size=10) +
+                                  facet_wrap(~Cell_type, labeller = label_wrap_gen())
+
+ggsave2(filename = "./Plots/cell_distrib_boxplot_facet.pdf", plot = cell_dist.box.p, width = 13, height = 13)
+print(cell_dist.box.p)
+```
+
