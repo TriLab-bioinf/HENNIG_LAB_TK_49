@@ -1,6 +1,7 @@
 ---
 title: "SEURAT MULTIDATA INTEGRATION"
 author: "Hernan Lorenzi"
+version: "Final"
 output:
   html_document:
     df_print: paged
@@ -98,7 +99,7 @@ ln_merged_seurat_filtered <- subset(ln_merged_seurat, subset = nCount_RNA > 500 
 
 ### Perform standard workflow to check if there is any batch effects
 ```{r}
-ln_merged_seurat_filtered <- NormalizeData(object = ln_merged_seurat_filtered)
+ln_merged_seurat_filtered <- NormalizeData(object = ln_merged_seurat_filtered, )
 ln_merged_seurat_filtered <- FindVariableFeatures(object = ln_merged_seurat_filtered)
 ln_merged_seurat_filtered <- ScaleData(object = ln_merged_seurat_filtered)
 ln_merged_seurat_filtered <- RunPCA(object = ln_merged_seurat_filtered)
@@ -181,9 +182,11 @@ for(j in unique(sctype_scores$cluster)){
   ln_merged_seurat_filtered@meta.data$customclassif[ln_merged_seurat_filtered@meta.data$seurat_clusters == j] = as.character(cl_type$type[1])
 }
 
-annot_clusters.p1 <- DimPlot(ln_merged_seurat_filtered, reduction = "umap", label = TRUE, repel = TRUE, group.by = 'customclassif')  
-ggsave2(filename = "./Plots/ln_annotated_clusters_umap.pdf", plot = annot_clusters.p1, width = 11, height = 11)
-annot_clusters.p1
+annot_clusters.p1 <- DimPlot(ln_merged_seurat_filtered, reduction = "umap", label = TRUE, repel = TRUE, group.by = 'customclassif') 
+annot_clusters_by_genotype.p1 <- DimPlot(ln_merged_seurat_filtered, reduction = "umap", label = FALSE, repel = TRUE, group.by = 'genotype') 
+
+ggsave2(filename = "./Plots/ln_annotated_clusters_umap.pdf", plot = annot_clusters.p1 + annot_clusters_by_genotype.p1, width = 21, height = 11)
+annot_clusters.p1 + annot_clusters_by_genotype.p1
 ```
 
 ### Save Seurat analysis
@@ -232,8 +235,14 @@ saveRDS(ln_merged_seurat_filtered, file = "GEX_LN_seurat_analysis_03272023.rds")
 # grid.arrange(int.p1, int.p2, ncol = 2)
 ```
 
+### Read RDS object
+```{}
+ln_merged_seurat_filtered <- readRDS(file = "GEX_LN_seurat_analysis_03272023.rds")
+```
+
 ### Estimate proportion of each cell type per sample
 ```{r}
+
 ln_meta <- as_tibble(ln_merged_seurat_filtered@meta.data)
 
 # Remove unwanted columns
@@ -295,4 +304,6 @@ cell_dist.box.p <- cell_dist %>% ggplot(aes(x = Genotype, y = Percent, fill=Cell
 ggsave2(filename = "./Plots/cell_distrib_boxplot_facet.pdf", plot = cell_dist.box.p, width = 13, height = 13)
 print(cell_dist.box.p)
 ```
-
+```{r}
+sessionInfo()
+```
