@@ -1,0 +1,431 @@
+---
+title: "TCR-seq"
+output: html_notebook
+author: "Hernan Lorenzi"
+date: 04-07-2023
+---
+
+```{r}
+library(immunarch)
+library(cowplot)
+library(R.utils)
+```
+
+# Build working dir structure
+```{r}
+dir.create(path = "./Plots", showWarnings = F)
+```
+
+
+```{r}
+immdata <- repLoad(.path = "./TCR_immunarch/")
+```
+
+# Select LN samples
+```{r}
+LN_immdata <- immdata
+LN_sample_ids <- filter(immdata$meta, Tissue == "LN")$Sample
+LN_immdata$data <- immdata$data[LN_sample_ids]
+LN_immdata$meta <- filter(immdata$meta, Tissue == "LN")
+
+```
+
+# Remove all NA rows from sample 1798
+```{r}
+#LN_immdata_filter$data$TCR_LN_1798_Het[!is.na(LN_immdata_filter$data$TCR_LN_1798_Het$Clones),]
+```
+
+
+# Filter out those clones with only one A or B chain predicted to ensure that cells come from the same clone
+```{r}
+LN_immdata_filter <- LN_immdata
+for (sample in LN_sample_ids){
+  LN_immdata_filter$data[[sample]] <- LN_immdata$data[[sample]][ str_detect(string = LN_immdata$data[[sample]]$chain, pattern = "TRA;TRB"),]
+}
+```
+
+# Plot number of unique clonotypes per genotype
+```{r}
+exp_vol <- repExplore(LN_immdata_filter$data, .method = "volume")
+p1 <- vis(exp_vol, .by = c("Genotype"), .meta = LN_immdata_filter$meta)
+ggsave2(filename = "unique_clonotype_per_genotype.pdf", plot = p1, path = "./Plots/")
+print(p1)
+```
+
+```{r}
+exp_len <- repExplore(LN_immdata_filter$data, .method = "len", .col = "aa")
+exp_cnt <- repExplore(LN_immdata_filter$data, .method = "count")
+exp_vol <- repExplore(LN_immdata_filter$data, .method = "volume")
+
+p1 <- vis(exp_len)
+p2 <- vis(exp_cnt)
+p3 <- vis(exp_vol, .meta = LN_immdata_filter$meta)
+
+ggsave2(filename = "distr_CDR3_length.pdf", plot = p1, path = "./Plots/")
+ggsave2(filename = "distr_clonotype_abund.pdf", plot = p2, path = "./Plots/")
+ggsave2(filename = "Numb_unique_clonotypes.pdf", plot = p3, path = "./Plots/")
+
+print(p1)
+print(p2 + p3)
+
+```
+
+
+```{r}
+p4 <- vis(exp_len, .by = "Genotype", .meta = LN_immdata_filter$meta)
+ggsave2(filename = "distr_CDR3_length_by_Genotype.pdf", plot = p4, path = "./Plots/", height = 8, width = 18)
+print(p4)
+```
+
+
+
+
+
+# Clonal proportions: percentage of clonotypes required to occupy a specified percent of the total immune repertoire.
+```{r}
+imm_pr <- repClonality(LN_immdata_filter$data, .method = "clonal.prop",.perc = 5)
+imm_pr
+```
+
+# Estimate relative abundance for the groups of top clonotypes in repertoire, e.g., ten most abundant clonotypes. 
+```{r}
+imm_top <- repClonality(LN_immdata_filter$data, .method = "top", .head = c(10, 100, 1000, 3000, 10000))
+print(imm_top)
+top.p <- vis(imm_top, .meta = LN_immdata_filter$meta) + vis(imm_top, .by = c("Genotype"), .meta = LN_immdata_filter$meta)
+ggsave2(filename = "top_clonal_proportion_by_Genotype.pdf", plot = top.p, path = "./Plots/", height = 8, width = 11)
+print(top.p)
+```
+
+# Estimate relative abundance for the groups of rare clonotypes with low counts 
+```{r}
+imm_rare <- repClonality(LN_immdata_filter$data, .method = "rare")
+print(imm_rare)
+rare.p <- my.vis.immunr_rare_prop(imm_rare, .meta = LN_immdata_filter$meta) + vis(imm_rare, .by = "Genotype", .meta = LN_immdata_filter$meta)
+ggsave2(filename = "rare_clonal_proportion_by_Genotype.pdf", plot = rare.p, path = "./Plots/", height = 8, width = 11)
+print(rare.p)
+```
+
+# Analyse relative abundance (also known as clonal space homeostasis), which is defined as the proportion of repertoire occupied by clonal groups with specific abundances:
+```{r}
+imm_hom <- repClonality(LN_immdata_filter$data,
+  .method = "homeo",
+  .clone.types = c(Small = .0001, Medium = .001, Large = .01, Hyperexpanded = 1)
+)
+print(imm_hom)
+
+hom.p <- vis(imm_hom, .meta = LN_immdata_filter$meta) + vis(imm_hom, .by = c("Genotype"), .meta = LN_immdata_filter$meta)
+ggsave2(filename = "rel_abundance_clonotypes.pdf", plot = hom.p, path = "./Plots/", height = 8, width = 11)
+print(hom.p)
+```
+
+```{r}
+overlap.p <- repOverlap(LN_immdata_filter$data) %>% vis()  # Build the heatmap of public clonotypes shared between repertoires
+ggsave2(filename = "clonotype_overlap.pdf", plot = overlap.p, path = "./Plots/", height = 8, width = 11)
+print(overlap.p)
+```
+
+```{r}
+LN_immdata_filter_not_single_counts <- LN_immdata_filter
+for (sample in LN_sample_ids){
+  # Remove rows with counts = 1
+  LN_immdata_filter_not_single_counts$data[[sample]] <- filter(LN_immdata_filter$data[[sample]], Clones > 1)
+  # Visualise the V-gene distribution across samples
+  usage.p <- geneUsage(LN_immdata_filter_not_single_counts$data[[sample]]) %>% vis()  
+  ggsave2(filename = paste0("clonotype_usage_",sample,".pdf"), plot = usage.p, path = "./Plots/", height = 8, width = 11)
+  print(usage.p)
+}
+```
+
+```{r}
+diversity.p <- repDiversity(LN_immdata_filter$data) %>% vis(.by = c("Genotype"), .meta = LN_immdata_filter$meta)  # Visualise the Chao1 diversity of repertoires, grouped by the patient status
+ggsave2(filename = "clonotype_diversity.pdf", plot = diversity.p, path = "./Plots/", height = 7, width = 7)
+print(diversity.p)
+```
+
+# Load Seurat object and all necessary libraries
+```{r}
+# Libraries
+library(Seurat)
+
+# Load Seurat object
+ln_merged_seurat_filtered <- readRDS(file = "./GEX_LN_seurat_analysis_03272023.rds")
+```
+
+# Aux funtions to filter TCR cells based on Seurat cluster ID
+```{r}
+# Function that extracts seurat cluster info from seurate obj metadata
+get_seurat_cluster_barcodes <- function(cluster_number, seurat_obj){
+  .s_barcodes <- rownames(seurat_obj@meta.data)[seurat_obj@meta.data$seurat_clusters == cluster_number]
+  
+  # Parse s_barcodes
+  .s_barcodes <- separate(data = tibble(.s_barcodes), 
+           into = c("tissue", "mouse", "genotype", "barcode"), 
+           sep="_", 
+           col = ".s_barcodes") %>% 
+              mutate(sample = paste('TCR',tissue,mouse,genotype, sep = "_"))
+  # Add cluster ID
+  .s_barcodes$seurat_clusters <- cluster_number
+  .s_barcodes$cell_type <- subset(seurat_obj@meta.data, seurat_clusters == cluster_number)[1,'customclassif']
+  return(.s_barcodes)
+}
+
+# Function to filter TCR files based on seurat cluster number
+# Filtered csv files should be stored in directory called **S_CLUSTER_#** within 
+# working dir. Should also include the metadata fil=e for compatibility with immunarch
+# Imput files should be named as **sample_name.csv**
+
+
+filter_tcr_table <- function(s_barcodes, tcr_source_dir){
+  .sc_number = s_barcodes$seurat_clusters[1]
+  # create directory to store seurat-cluster-specific TCR data
+  .sc_dirname = paste0("./TCR_BY_CLUSTER/CLUSTER_",.sc_number)
+  dir.create(path = .sc_dirname , showWarnings = F, recursive = T)
+  
+  
+  samples_with_data <- c()
+  for (s in unique(s_barcodes$sample)){
+    .infilename = paste0(tcr_source_dir,"/",s,".csv")
+    .outfilename = paste0(.sc_dirname,"/",s,".csv")
+    .tcr_data <- read_csv(file = .infilename, col_names = T)
+    .tcr_data_filter <- filter(.tcr_data, barcode %in% s_barcodes$barcode)
+    
+    # Save sample only if contains any data for current cluster
+    if (nrow(.tcr_data_filter) > 0){
+      write_csv(x = .tcr_data_filter, file = .outfilename, quote = "none")
+      samples_with_data <- c(samples_with_data, s)
+    }
+  }  
+  
+  # Load original metadata and add column with Seurat cluster ID
+  .inmeta <- read_delim(file = paste0(tcr_source_dir,"/metadata.txt"), col_names = T, delim = "\t")
+  .inmeta$Seurat_clusters <- .sc_number
+  
+  # Remove empty samples from metadata table
+  .inmeta <- filter(.inmeta, Sample %in% samples_with_data)
+  write_delim(x = .inmeta, file = paste0(.sc_dirname,"/metadata.txt"), 
+              delim = "\t", quote = "none")
+}
+```
+
+# Generate seurat cluster-specific TCR files for further analysis
+```{r}
+seurat_clusters <- unique(ln_merged_seurat_filtered@meta.data$seurat_clusters)
+for (sc_number in seurat_clusters){
+  # Retreive seurat cluster barcodes from seurat object
+  s_cluster_number = sc_number
+  s_barcodes <- get_seurat_cluster_barcodes(cluster_number = s_cluster_number, 
+                                            seurat_obj = ln_merged_seurat_filtered)
+  
+  # Generate seurat cluster-specific TCR files
+  filter_tcr_table(s_barcodes = s_barcodes, tcr_source_dir = "./TCR_immunarch_LN")
+}
+```
+
+# Aux function to run entire immunarch analysis for one cluster
+```{r}
+# Function to run entire immunarch analysis for one cluster
+run_immunarch <- function(imput_dir){
+  # Prepare working dir
+  .plots_dir = paste0(imput_dir,"/Plots")
+  dir.create(path = .plots_dir, showWarnings = F, recursive = T)
+  
+  # create a link to metadata.txt within Plots to avoid errors loading the metadata with the package immunarch
+  createLink(link=paste0(.plots_dir,'/metadata.txt'), target=paste0(imput_dir,'/metadata.txt'))
+  
+  # Check if metadata contains more than one genotype, otherwise skip this cluster
+  .inmeta <- read_delim(file = paste0(imput_dir,'/metadata.txt'), col_names = T, delim = "\t")
+  if(length(unique(.inmeta$Genotype)) < 2){
+    return()
+  }
+  
+  
+  # Load data as an immunarch object
+  .immdata <- repLoad(.path = imput_dir)
+  
+  # Filter out those clones with only one A or B chain predicted to ensure that cells come from the same clone
+  .sample_ids <- .immdata$Sample
+  .immdata_filter <- .immdata
+  for (sample in .sample_ids){
+    .immdata_filter$data[[sample]] <- .immdata$data[[sample]][ str_detect(string = .immdata$data[[sample]]$chain, pattern = "TRA;TRB"),]
+  }
+  
+  # Plot number of unique clonotypes per genotype
+  .exp_vol <- repExplore(.immdata_filter$data, .method = "volume")
+  p1 <- vis(.exp_vol, .by = c("Genotype"), .meta = .immdata_filter$meta)
+  ggsave2(filename = "unique_clonotype_per_genotype.pdf", plot = p1, path = .plots_dir)
+  
+  # Exploratory analysis
+  .exp_len <- repExplore(.immdata_filter$data, .method = "len", .col = "aa")
+  .exp_cnt <- repExplore(.immdata_filter$data, .method = "count")
+  .exp_vol <- repExplore(.immdata_filter$data, .method = "volume")
+  
+  p1 <- vis(.exp_len)
+  p2 <- vis(.exp_cnt)
+  p3 <- vis(.exp_vol, .meta = .immdata_filter$meta)
+  
+  ggsave2(filename = "distr_CDR3_length.pdf", plot = p1, path = .plots_dir)
+  ggsave2(filename = "distr_clonotype_abund.pdf", plot = p2, path = .plots_dir)
+  ggsave2(filename = "Numb_unique_clonotypes.pdf", plot = p3, path = .plots_dir)
+  
+  #
+  
+  p4 <- vis(exp_len, .by = "Genotype", .meta = .immdata_filter$meta)
+  ggsave2(filename = "distr_CDR3_length_by_Genotype.pdf", plot = p4, 
+          path = .plots_dir, height = 8, width = 18)
+  
+  # Clonal proportions: percentage of clonotypes required to occupy a specified percent of the total immune repertoire.
+  
+  .imm_pr <- repClonality(.immdata_filter$data, .method = "clonal.prop",.perc = 5)
+  
+  # Estimate relative abundance for the groups of top clonotypes in repertoire, e.g., ten most abundant clonotypes.
+  
+  .imm_top <- repClonality(.immdata_filter$data, .method = "top", .head = c(10, 100, 1000, 3000, 10000))
+  top.p <- vis(.imm_top, .meta = .immdata_filter$meta) + 
+           vis(.imm_top, .by = c("Genotype"), .meta = .immdata_filter$meta)
+  ggsave2(filename = "top_clonal_proportion_by_Genotype.pdf", 
+          plot = top.p, path = .plots_dir, height = 8, width = 11)
+  
+  # Estimate relative abundance for the groups of rare clonotypes with low counts 
+  
+  .imm_rare <- repClonality(.immdata_filter$data, .method = "rare")
+  rare.p <- vis(.imm_rare, .meta = .immdata_filter$meta) +
+            vis(.imm_rare, .by = "Genotype", .meta = .immdata_filter$meta)
+  ggsave2(filename = "rare_clonal_proportion_by_Genotype.pdf", 
+          plot = rare.p, path = .plots_dir, height = 8, width = 11)
+
+  # Analyse relative abundance (also known as clonal space homeostasis), which is defined as the proportion of repertoire occupied by clonal groups with specific abundances:
+
+  .imm_hom <- repClonality(.immdata_filter$data,
+                          .method = "homeo",
+                          .clone.types = c(Small = .0001, Medium = .001, 
+                                           Large = .01, Hyperexpanded = 1)
+                          )
+  
+  hom.p <- vis(.imm_hom, .meta = .immdata_filter$meta) + 
+           vis(imm_hom, .by = c("Genotype"), .meta = .immdata_filter$meta)
+  ggsave2(filename = "rel_abundance_clonotypes.pdf", 
+          plot = hom.p, path = .plots_dir, height = 8, width = 11)
+  
+  # Build the heatmap of public clonotypes shared between repertoires
+  
+  overlap.p <- repOverlap(.immdata_filter$data) %>% vis()  
+  ggsave2(filename = "clonotype_overlap.pdf", 
+          plot = overlap.p, path = .plots_dir, height = 8, width = 11)
+
+  
+  # # Calculate the Chao1 diversity of repertoires, grouped by genotype
+
+    diversity.p <- repDiversity(.immdata_filter$data) %>% vis(.by = c("Genotype"), .meta = .immdata_filter$meta)  
+  ggsave2(filename = "clonotype_diversity.pdf", 
+          plot = diversity.p, path = .plots_dir, height = 7, width = 7)
+
+}
+```
+
+Run immunarch analysis on each cluster
+```{r}
+for (c_num in seurat_clusters){
+  print(paste0("Processing cluster ",c_num))
+  run_immunarch(imput_dir = paste0("./TCR_BY_CLUSTER/CLUSTER_", c_num))
+}
+```
+
+Test
+```{r}
+
+tcr_barcodes <- c()
+
+for (s in LN_immdata_filter$meta$Sample){
+  # Create vector of barcodes from Barrcode column
+  bc <- strsplit(x = paste(LN_immdata_filter$data[[s]]$Barcode, 
+                           collapse = ";"), split = ";")[[1]]
+  
+  # add sample name
+  bc = str_replace(string = paste(s,bc, sep = '_'), 
+              pattern = "TCR_", 
+              replacement = "")
+  
+  tcr_barcodes <- c(tcr_barcodes, bc)
+}
+length(tcr_barcodes)
+
+# Filter seurat object keeping only barcodes in TCR dataset
+seurat_tcr <- ln_merged_seurat_filtered
+seurat_tcr@meta.data$sample = rownames(seurat_tcr@meta.data)
+seurat_tcr <- subset(seurat_tcr, subset = sample  %in% tcr_barcodes)
+
+```
+
+Seurat analysis on cells with TCR data
+```{r}
+annot_clusters.p1 <- DimPlot(seurat_tcr, reduction = "umap", label = TRUE, repel = TRUE, group.by = 'genotype') + ylim(-15,11) # UMAP for TCR cells 
+annot_clusters.p2 <- DimPlot(ln_merged_seurat_filtered, reduction = "umap", label = TRUE, repel = TRUE, group.by = 'customclassif') + ylim(-15,11) # UMAP for ALL cells 
+ggsave2(filename = "./Plots/TCR_ln_annotated_clusters_umap.pdf", plot = annot_clusters.p1 + annot_clusters.p2, width = 21, height = 11)
+annot_clusters.p1
+
+annot_clusters.p3 <- DimPlot(seurat_tcr, reduction = "umap", label = TRUE, repel = TRUE, split.by = 'genotype', group.by = 'customclassif') + ylim(-15,11)
+ggsave2(filename = "./Plots/TCR_ln_annotated_clusters_umap_split.pdf", 
+        plot = annot_clusters.p3, width = 21, height = 11)
+```
+
+### Estimate proportion of each cell type per sample
+```{r}
+ln_meta_tcr <- as_tibble(seurat_tcr@meta.data)
+
+# Remove unwanted columns
+keep <- grep(pattern = '^RNA_snn_res', colnames(ln_meta_tcr), invert = T)
+ln_meta_tcr <- ln_meta_tcr[,keep]
+```
+
+#### Add columns with data summaries grouped by genotype, mouse ID and cell-type
+```{r}
+cell_dist_tcr <- ln_meta_tcr %>% group_by(genotype, mouse) %>%
+    count(genotype, customclassif) %>%
+    mutate(percent = n / sum(n) * 100) %>%
+    mutate(group = paste0(genotype,"_",customclassif))
+
+colnames(cell_dist_tcr) <- c("Genotype","Mouse_ID","Cell_type","Cell_count","Percent","Group" )
+
+write.csv(x = cell_dist_tcr, file = "Cell_distribution_summary_TCR.csv",col.names = F )
+head(cell_dist_tcr)
+```
+
+#### Cell-type composition plots
+```{r}
+cell_dist.p <- cell_dist_tcr %>% ggplot(aes(fill=Cell_type, y=Cell_count, x=Genotype)) +
+    geom_bar(position="fill", stat="identity") +
+    scale_fill_viridis(discrete = T) +
+    ggtitle("Proportion of cell-types per genotype") +
+    theme_ipsum(base_family = 'Helvetica', base_size = 10, axis_title_just = 0.5) +
+    ylab('Percent') 
+
+ggsave2(filename = "./Plots/cell_distrib_barchar_TCR.pdf", plot = cell_dist.p)
+print(cell_dist.p)
+```
+
+```{r}
+cell_dist_perc_tcr.p <- cell_dist_tcr %>% ggplot(aes(fill=Cell_type, y=Percent, x=Genotype)) +
+                    geom_bar(position="dodge", stat="identity") +
+                    scale_fill_viridis(discrete = T) +
+                    ggtitle("Proportion of cell-types per genotype (TCR)") +
+                    theme_ipsum(axis_title_just = 0.5, base_family = 'Helvetica', strip_text_size=10) +
+                    facet_wrap(~Cell_type, labeller = label_wrap_gen())
+
+
+ggsave2(filename = "./Plots/cell_distrib_barchar_facet_TCR.pdf", plot = cell_dist_perc_tcr.p, width = 13, height = 13)
+print(cell_dist_perc_tcr.p)
+
+```
+```{r}
+cell_dist.box_tcr.p <- cell_dist_tcr %>% ggplot(aes(x = Genotype, y = Percent, fill=Cell_type)) + 
+                                  geom_boxplot() + 
+                                  scale_fill_viridis(discrete = T) +
+                                  theme_ipsum(axis_title_just = 0.5, 
+                                              base_family = 'Helvetica', 
+                                              strip_text_size=10) +
+                                  facet_wrap(~Cell_type, labeller = label_wrap_gen())
+
+ggsave2(filename = "./Plots/cell_distrib_boxplot_facet_tcr.pdf", plot = cell_dist.box_tcr.p, width = 13, height = 13)
+print(cell_dist.box_tcr.p)
+```
+
