@@ -428,4 +428,6 @@ cell_dist.box_tcr.p <- cell_dist_tcr %>% ggplot(aes(x = Genotype, y = Percent, f
 ggsave2(filename = "./Plots/cell_distrib_boxplot_facet_tcr.pdf", plot = cell_dist.box_tcr.p, width = 13, height = 13)
 print(cell_dist.box_tcr.p)
 ```
-
+```{r}
+sessionInfo()
+```
